@@ -1,0 +1,53 @@
+# AI Engineering Foundation
+
+## 📌 Project Overview
+This project demonstrates fundamental Python programming and API integration concepts.  
+It calls a public REST API and processes JSON responses.
+
+## 🧠 What This Project Covers
+- Python basics
+- HTTP requests
+- REST API integration
+- JSON handling
+- Project structure best practices
+
+## 🏗 Architecture
+
+User → Python Script → Public API → JSON Response → Output
+
+## 📂 Project Structure
+
+ai-engineering-foundation/
+│
+├── main.py
+├── requirements.txt
+├── README.md
+├── .gitignore
+└── src/
+    └── api_client.py
+
+## 🚀 How to Run
+
+1. Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+2. Run the script:
+
+```bash
+python main.py
+```
+
+
+## 🔮 Future Improvements
+- Add error handling
+- Convert to FastAPI
+- Dockerize application
+- Integrate LLM API
+- Add logging & monitoring
+
+---
+
+Built as part of AI + DevOps learning journey.
