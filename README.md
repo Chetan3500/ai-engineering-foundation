@@ -47,6 +47,11 @@ python main.py
 - HTTP error validation
 - Exception handling
 
+## Development Workflow
+- Feature-branch strategy
+- Structured commit messages
+- Pull request review process
+
 ## 🔮 Future Improvements
 
 - Convert to FastAPI
