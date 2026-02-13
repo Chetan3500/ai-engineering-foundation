@@ -17,6 +17,7 @@ User → Python Script → Public API → JSON Response → Output
 
 ## 📂 Project Structure
 
+```text
 ai-engineering-foundation/
 │
 ├── main.py
@@ -25,6 +26,7 @@ ai-engineering-foundation/
 ├── .gitignore
 └── src/
     └── api_client.py
+```
 
 ## 🚀 How to Run
 
