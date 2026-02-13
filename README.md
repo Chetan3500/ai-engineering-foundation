@@ -42,9 +42,13 @@ pip install -r requirements.txt
 python main.py
 ```
 
+## Reliability Improvements
+- Timeout handling
+- HTTP error validation
+- Exception handling
 
 ## 🔮 Future Improvements
-- Add error handling
+
 - Convert to FastAPI
 - Dockerize application
 - Integrate LLM API
