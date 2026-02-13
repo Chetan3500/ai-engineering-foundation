@@ -52,6 +52,11 @@ python main.py
 - Structured commit messages
 - Pull request review process
 
+## Advanced Logging
+- Environment-based log level configuration
+- Console + file handlers
+- Persistent logs for failure investigation
+
 ## 🔮 Future Improvements
 
 - Convert to FastAPI
