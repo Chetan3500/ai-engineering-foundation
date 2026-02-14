@@ -67,11 +67,15 @@ python main.py
 - Validation of response types
 - Automated test execution
 
+## AI Integration
+- Gemini LLM API integration
+- Environment-based API key management
+- Prompt-based CLI interface
+
 ## 🔮 Future Improvements
 
 - Convert to FastAPI
 - Dockerize application
-- Integrate LLM API
 - Add logging & monitoring
 
 ---
