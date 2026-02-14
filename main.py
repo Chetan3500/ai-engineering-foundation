@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 
-# import the logging module
+# import the modules
 import logging
+import argparse
 
 # import the api_client module
 from src.logger_config import setup_logger
@@ -14,19 +15,21 @@ logger = logging.getLogger(__name__)
 
 # define a main function to call the GitHub API and print the response
 def main():
-    # log the start of the application
+    parser = argparse.ArgumentParser(description="Github API CLI Tool")
+    parser.add_argument("--show-data", action="store_true", help="Display API response data")
+    args = parser.parse_args()
+
     logger.info("Starting the application")
 
     status_code, response = call_github_api()
 
-    # log the response
-    if status_code is None:
-        logger.error(f"API call failed with error: {response}")
-    else:
+    if status_code:
         logger.info(f"API call successful with status code: {status_code}")
-        logger.debug(f"Response Body: {response}")
+        if args.show_data:
+            logger.debug("Response Body: %s", response)
+    else:
+        logger.error("API call failed with error: %s", response)
 
-    # log the end of the application
     logger.info("Finished the application")
 
 # call the main function
