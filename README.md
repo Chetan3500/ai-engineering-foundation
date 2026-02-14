@@ -62,6 +62,11 @@ python main.py
 - Runtime-adjustable timeout
 - CLI argument support
 
+## Testing
+- Unit tests using pytest
+- Validation of response types
+- Automated test execution
+
 ## 🔮 Future Improvements
 
 - Convert to FastAPI
