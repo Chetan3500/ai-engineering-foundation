@@ -57,6 +57,11 @@ python main.py
 - Console + file handlers
 - Persistent logs for failure investigation
 
+## Configuration Management
+- Environment-based configuration
+- Runtime-adjustable timeout
+- CLI argument support
+
 ## 🔮 Future Improvements
 
 - Convert to FastAPI
