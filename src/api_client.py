@@ -2,13 +2,18 @@ import requests
 import logging
 import os
 
+# import typing for Tuple and Union
+# Tuple: a collection of values of the same type
+# Union: a collection of values of different types
+from typing import Tuple, Union
+
 # get the logger
 # __name__ is the name of the module
 logger = logging.getLogger(__name__)
 
 # define a function to call the GitHub API 
 # return the status code and response body
-def call_github_api():
+def call_github_api() -> Tuple[Union[int, None], Union[dict, str]]:
     # The request will time out if the response takes longer than 5 seconds.
     timeout = int(os.getenv("API_TIMEOUT", 5))
     try:
