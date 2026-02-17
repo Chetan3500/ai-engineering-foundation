@@ -72,6 +72,11 @@ python main.py
 - Environment-based API key management
 - Prompt-based CLI interface
 
+## Model Strategy
+- Default: gemini-2.5-flash
+- Configurable via environment variable
+- Designed for low-latency and cost-efficient use
+
 ## 🔮 Future Improvements
 
 - Convert to FastAPI
