@@ -9,6 +9,21 @@ logger = logging.getLogger(__name__)
 
 conversation_history = []
 
+def summarize_history(client, model_name, messages):
+    summary_prompt = "Summarize the following conversation briefly but preserve key context:\\n\\n"
+
+    for msg in messages:
+        summary_prompt += f"{msg['role']}: {msg['content']}\\n"
+
+    response = client.models.generate_content(
+        model=model_name,
+        contents=summary_prompt,
+        config={"max_output_tokens": 300}
+    )
+
+    return response.text if response and response.text else ""
+
+
 def call_gemini(prompt: str) -> Tuple[bool, str]:
     api_key = os.getenv("GENAI_API_KEY")
     model_name = os.getenv("GENAI_MODEL_NAME", "gemini-2.5-flash")
@@ -51,8 +66,20 @@ def call_gemini(prompt: str) -> Tuple[bool, str]:
         logger.info(f"Estimated memory prompt tokens: {memory_prompt_tokens}")
 
         if memory_prompt_tokens > max_memory_tokens:
-            logger.warning("Memory exceed limit, remove old messages")
-            del conversation_history[:2]
+            logger.warning("Memory exceed limit, summarizing old messages")
+            
+            old_messages = conversation_history[-2:]
+            recent_messages = conversation_history[:-2]
+
+            summary = summarize_history(client, model_name, old_messages)
+            
+            # replace old messages with summary and recent messages
+            conversation_history.clear()
+            conversation_history.append({
+                "role": "system",
+                "content": summary
+            })
+            conversation_history.extend(recent_messages)
 
         start_time = time.time()
 
