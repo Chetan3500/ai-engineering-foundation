@@ -9,6 +9,7 @@ from collections import deque
 logger = logging.getLogger(__name__)
 
 request_timestamps = deque()
+user_state = {}
 
 conversation_history = []
 
@@ -29,20 +30,29 @@ def summarize_history(client, model_name, messages):
     return response.text if response and response.text else ""
 
 
-def call_gemini(prompt: str) -> Tuple[bool, str]:
-    max_requests_per_minute = int(os.getenv("MAX_REQUESTS_PER_MINUTE", 10))
+def call_gemini(user_id: str, prompt: str) -> Tuple[bool, str]:
+    if user_id not in user_state:
+        user_state[user_id] = {
+            "memory": [],
+            "request_timestamps": deque(),
+            "token_usage": 0
+        }
+    
+    user = user_state[user_id]
 
     current_time = time.time()
 
-    # Remove timestamps older than 60 seconds
-    while request_timestamps and current_time - request_timestamps[0] > 60:
-        request_timestamps.popleft()
+    max_requests_per_minute = int(os.getenv("MAX_REQUESTS_PER_MINUTE", 10))
 
-    if len(request_timestamps) >= max_requests_per_minute:
-        logger.warning("Rate limit exceeded")
+    # Remove timestamps older than 60 seconds
+    while user["request_timestamps"] and current_time - user["request_timestamps"][0] > 60:
+        user["request_timestamps"].popleft()
+
+    if len(user["request_timestamps"]) >= max_requests_per_minute:
+        logger.warning(f"Rate limit exceeded for user {user_id}")
         return False, "Too many requests. Slow down."
 
-    request_timestamps.append(current_time)
+    user["request_timestamps"].append(current_time)
 
     api_key = os.getenv("GENAI_API_KEY")
     model_name = os.getenv("GENAI_MODEL_NAME", "gemini-2.5-flash")
@@ -71,13 +81,13 @@ def call_gemini(prompt: str) -> Tuple[bool, str]:
     client = genai.Client(api_key=api_key)
 
     try:
-        conversation_history.append({
+        user["memory"].append({
             "role": "user",
             "content": prompt
         })
 
         full_prompt = ""
-        for message in conversation_history:
+        for message in user["memory"]:
             full_prompt += f"{message['role']}: {message['content']}\n"
         full_prompt += "ASSISTANT: "
 
@@ -87,18 +97,18 @@ def call_gemini(prompt: str) -> Tuple[bool, str]:
         if memory_prompt_tokens > max_memory_tokens:
             logger.warning("Memory exceed limit, summarizing old messages")
             
-            old_messages = conversation_history[-2:]
-            recent_messages = conversation_history[:-2]
+            old_messages = user["memory"][-2:]
+            recent_messages = user["memory"][:-2]
 
             summary = summarize_history(client, model_name, old_messages)
             
             # replace old messages with summary and recent messages
-            conversation_history.clear()
-            conversation_history.append({
+            user["memory"].clear()
+            user["memory"].append({
                 "role": "system",
                 "content": summary
             })
-            conversation_history.extend(recent_messages)
+            user["memory"].extend(recent_messages)
 
         start_time = time.time()
 
@@ -123,7 +133,7 @@ def call_gemini(prompt: str) -> Tuple[bool, str]:
         response_text = response.text
         logger.info(f"Response length: {len(response_text)} characters")
 
-        conversation_history.append({
+        user["memory"].append({
             "role": "assistant",
             "content": response_text
         })
@@ -133,6 +143,8 @@ def call_gemini(prompt: str) -> Tuple[bool, str]:
 
         total_tokens = input_tokens + output_tokens
         logger.info(f"Estimated total tokens: {total_tokens}")
+
+        user["token_usage"] += total_tokens
 
         cost = (total_tokens / 1000) * cost_per_1k_tokens
         logger.info(f"Estimated request cost: ${cost:.6f}")
@@ -145,13 +157,12 @@ def call_gemini(prompt: str) -> Tuple[bool, str]:
 
         max_session_tokens = int(os.getenv("MAX_SESSION_TOKENS", 5000))
 
-        global session_token_usage
-        session_token_usage += total_tokens
+        user["token_usage"] += total_tokens
 
-        logger.info(f"Session token usage: {session_token_usage}")
+        logger.info(f"Session token usage: {user['token_usage']}")
 
-        if session_token_usage > max_session_tokens:
-            logger.warning("Session token quota exceeded")
+        if user['token_usage'] > max_session_tokens:
+            logger.warning(f"Session token quota exceeded for user {user_id}")
             return False, "Session token limit reached."
 
         return True, response_text
