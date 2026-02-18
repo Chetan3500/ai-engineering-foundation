@@ -7,6 +7,8 @@ from google import genai
 
 logger = logging.getLogger(__name__)
 
+conversation_history = []
+
 def call_gemini(prompt: str) -> Tuple[bool, str]:
     api_key = os.getenv("GENAI_API_KEY")
     model_name = os.getenv("GENAI_MODEL_NAME", "gemini-2.5-flash")
@@ -15,10 +17,11 @@ def call_gemini(prompt: str) -> Tuple[bool, str]:
         logger.error("API key not found")
         return False, "API key not found"
 
-    max_input_tokens = int(os.getenv("MAX_INPUT_TOKENS", "200"))
-    max_output_tokens = int(os.getenv("MAX_OUTPUT_TOKENS", "500"))
+    max_input_tokens = int(os.getenv("MAX_INPUT_TOKENS", "2000"))
+    max_output_tokens = int(os.getenv("MAX_OUTPUT_TOKENS", "1500"))
     cost_per_1k_tokens = float(os.getenv("COST_PER_1K_TOKENS", "0.0003"))
-    max_context_tokens = int(os.getenv("MAX_CONTEXT_TOKENS", "1500"))
+    max_context_tokens = int(os.getenv("MAX_CONTEXT_TOKENS", "8500"))
+    max_memory_tokens = int(os.getenv("MAX_MEMORY_TOKENS", "3000"))
     
     input_tokens = estimate_tokens(prompt)
     logger.info(f"Estimated input tokens: {input_tokens}")
@@ -33,23 +36,37 @@ def call_gemini(prompt: str) -> Tuple[bool, str]:
 
     client = genai.Client(api_key=api_key)
 
-    # call the gemini api
     try:
-        # start timing
+        conversation_history.append({
+            "role": "user",
+            "content": prompt
+        })
+
+        full_prompt = ""
+        for message in conversation_history:
+            full_prompt += f"{message['role']}: {message['content']}\n"
+        full_prompt += "ASSISTANT: "
+
+        memory_prompt_tokens = estimate_tokens(full_prompt)
+        logger.info(f"Estimated memory prompt tokens: {memory_prompt_tokens}")
+
+        if memory_prompt_tokens > max_memory_tokens:
+            logger.warning("Memory exceed limit, remove old messages")
+            del conversation_history[:2]
+
         start_time = time.time()
+
         response = client.models.generate_content(
             model=model_name,
-            contents=prompt,
+            contents=full_prompt,
             config={
                 "max_output_tokens": max_output_tokens
             }
         )
         logger.info(f"Sending prompt to Gemini model: {model_name}")
-        logger.info(f"Prompt length: {len(prompt)} characters")
+        logger.info(f"Prompt length: {len(full_prompt)} characters")
 
-        # end timing
         end_time = time.time()
-        # latency
         latency = end_time - start_time
         logger.info(f"LLM Latency: {latency:.3f} seconds")
 
@@ -59,6 +76,11 @@ def call_gemini(prompt: str) -> Tuple[bool, str]:
         
         response_text = response.text
         logger.info(f"Response length: {len(response_text)} characters")
+
+        conversation_history.append({
+            "role": "assistant",
+            "content": response_text
+        })
 
         output_tokens = estimate_tokens(response_text)
         logger.info(f"Estimated output tokens: {output_tokens}")
