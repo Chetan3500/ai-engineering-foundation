@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 def main():
     parser = argparse.ArgumentParser(description="Github API CLI Tool")
     parser.add_argument("--show-data", action="store_true", help="Display API response data")
+    parser.add_argument("--user-id", type=str, help="User ID for LLM")
     parser.add_argument("--prompt", type=str, help="Prompt for LLM")
     args = parser.parse_args()
 
@@ -28,9 +29,15 @@ def main():
             logger.error("API call failed with error: %s", response)
 
         logger.info("Finished the application")
-    elif args.prompt:
+    elif args.user_id or args.prompt:
+        if not args.prompt:
+            args.prompt = input("Enter a prompt: ")
+        
         while True:
-            success, result = call_gemini(args.prompt)
+            if args.user_id:
+                success, result = call_gemini(user_id=args.user_id, prompt=args.prompt)
+            else:
+                success, result = call_gemini(user_id=None, prompt=args.prompt)
             if success:
                 logger.info("LLM call successful with result: %s", result)
             else:
@@ -41,7 +48,7 @@ def main():
                 break
                         
     else:
-        logger.error("No arguments provided. Use --show-data or --prompt")
+        logger.error("No arguments provided. Use --show-data or --user-id and --prompt")
 
 if __name__ == "__main__":
     main()
