@@ -4,10 +4,15 @@ import math
 import time
 from typing import Tuple
 from google import genai
+from collections import deque
 
 logger = logging.getLogger(__name__)
 
+request_timestamps = deque()
+
 conversation_history = []
+
+session_token_usage = 0
 
 def summarize_history(client, model_name, messages):
     summary_prompt = "Summarize the following conversation briefly but preserve key context:\\n\\n"
@@ -25,6 +30,20 @@ def summarize_history(client, model_name, messages):
 
 
 def call_gemini(prompt: str) -> Tuple[bool, str]:
+    max_requests_per_minute = int(os.getenv("MAX_REQUESTS_PER_MINUTE", 10))
+
+    current_time = time.time()
+
+    # Remove timestamps older than 60 seconds
+    while request_timestamps and current_time - request_timestamps[0] > 60:
+        request_timestamps.popleft()
+
+    if len(request_timestamps) >= max_requests_per_minute:
+        logger.warning("Rate limit exceeded")
+        return False, "Too many requests. Slow down."
+
+    request_timestamps.append(current_time)
+
     api_key = os.getenv("GENAI_API_KEY")
     model_name = os.getenv("GENAI_MODEL_NAME", "gemini-2.5-flash")
 
@@ -32,11 +51,11 @@ def call_gemini(prompt: str) -> Tuple[bool, str]:
         logger.error("API key not found")
         return False, "API key not found"
 
-    max_input_tokens = int(os.getenv("MAX_INPUT_TOKENS", "2000"))
-    max_output_tokens = int(os.getenv("MAX_OUTPUT_TOKENS", "1500"))
-    cost_per_1k_tokens = float(os.getenv("COST_PER_1K_TOKENS", "0.0003"))
-    max_context_tokens = int(os.getenv("MAX_CONTEXT_TOKENS", "8500"))
-    max_memory_tokens = int(os.getenv("MAX_MEMORY_TOKENS", "3000"))
+    max_input_tokens = int(os.getenv("MAX_INPUT_TOKENS", 2000))
+    max_output_tokens = int(os.getenv("MAX_OUTPUT_TOKENS", 1500))
+    cost_per_1k_tokens = float(os.getenv("COST_PER_1K_TOKENS", 0.0003))
+    max_context_tokens = int(os.getenv("MAX_CONTEXT_TOKENS", 8500))
+    max_memory_tokens = int(os.getenv("MAX_MEMORY_TOKENS", 3000))
     
     input_tokens = estimate_tokens(prompt)
     logger.info(f"Estimated input tokens: {input_tokens}")
@@ -123,6 +142,17 @@ def call_gemini(prompt: str) -> Tuple[bool, str]:
 
         context_usage = (total_tokens / max_context_tokens) * 100
         logger.info(f"Context usage: {context_usage:.2f}%")
+
+        max_session_tokens = int(os.getenv("MAX_SESSION_TOKENS", 5000))
+
+        global session_token_usage
+        session_token_usage += total_tokens
+
+        logger.info(f"Session token usage: {session_token_usage}")
+
+        if session_token_usage > max_session_tokens:
+            logger.warning("Session token quota exceeded")
+            return False, "Session token limit reached."
 
         return True, response_text
 
