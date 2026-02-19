@@ -2,53 +2,45 @@
 
 import logging
 import argparse
-from src.logger_config import setup_logger
-from src.api_client import call_github_api
-from src.llm_client import call_gemini
+from src.llm_client import LLMService
 
-setup_logger()
+# -----------------------------
+# Logging Setup
+# -----------------------------
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="[ %(levelname)s - %(name)s - %(asctime)s ] %(message)s",
+)
+
 logger = logging.getLogger(__name__)
 
-def main():
-    parser = argparse.ArgumentParser(description="Github API CLI Tool")
-    parser.add_argument("--show-data", action="store_true", help="Display API response data")
-    parser.add_argument("--user-id", type=str, help="User ID for LLM")
-    parser.add_argument("--prompt", type=str, help="Prompt for LLM")
+
+def run_cli():
+    parser = argparse.ArgumentParser(description="LLM CLI Interface")
+    parser.add_argument("--user-id", type=str, required=True, help="User ID")
     args = parser.parse_args()
 
-    if args.show_data:
-        logger.info("Starting the application")
+    user_id = args.user_id
 
-        status_code, response = call_github_api()
+    service = LLMService()
 
-        if status_code:
-            logger.info(f"API call successful with status code: {status_code}")
-            if args.show_data:
-                logger.debug("Response Body: %s", response)
+    logger.info(f"Starting CLI for user: {user_id}")
+
+    while True:
+        prompt = input("You: ")
+
+        if prompt.lower() in ["exit", "quit"]:
+            print("Goodbye.")
+            break
+
+        success, response = service.chat(user_id=user_id, prompt=prompt)
+
+        if success:
+            print(f"AI: {response}\n")
         else:
-            logger.error("API call failed with error: %s", response)
+            print(f"Error: {response}\n")
 
-        logger.info("Finished the application")
-    elif args.user_id or args.prompt:
-        if not args.prompt:
-            args.prompt = input("Enter a prompt: ")
-        
-        while True:
-            if args.user_id:
-                success, result = call_gemini(user_id=args.user_id, prompt=args.prompt)
-            else:
-                success, result = call_gemini(user_id=None, prompt=args.prompt)
-            if success:
-                logger.info("LLM call successful with result: %s", result)
-            else:
-                logger.error("LLM call failed with error: %s", result)
-            
-            args.prompt = input("Enter a prompt (or 'exit' to quit): ")
-            if args.prompt.lower() == "exit":
-                break
-                        
-    else:
-        logger.error("No arguments provided. Use --show-data or --user-id and --prompt")
 
 if __name__ == "__main__":
-    main()
+    run_cli()
