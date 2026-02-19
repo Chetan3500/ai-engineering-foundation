@@ -1,257 +1,220 @@
 import os
-import logging
+import time
 import math
 import hashlib
-import time
-from typing import Tuple
-from google import genai
+import logging
+from typing import Dict, List, Tuple
 from collections import deque
+from google import genai
 
 logger = logging.getLogger(__name__)
 
-request_timestamps = deque()
-# ---------------------------
-# Global User State (Multi-user simulation)
-# ---------------------------
-user_state = {}
+# ==============================
+# Global In-Memory Structures
+# ==============================
 
-circuit_state = {
-    "failure_count": -1,
-    "opened_at": None,
-    "is_open": False
-}
+# Per-user state store
+users_state: Dict[str, dict] = {}
 
-# ---------------------------
-# Utility
-# ---------------------------
+# Global cache (safe, model-aware)
+cache_store: Dict[str, dict] = {}
+
+# ==============================
+# Utility Functions
+# ==============================
+
 def estimate_tokens(text: str) -> int:
+    # Rough estimation: 1 token ≈ 4 characters
     return math.ceil(len(text) / 4)
 
-
-def summarize_history(client, model_name, messages):
-    summary_prompt = "Summarize the following conversation briefly but preserve key context:\n\n"
-
-    for msg in messages:
-        summary_prompt += f"{msg['role']}: {msg['content']}\n"
-
-    response = client.models.generate_content(
-        model=model_name,
-        contents=summary_prompt,
-        config={"max_output_tokens": 300}
-    )
-
-    return response.text if response and response.text else ""
-
-cache_store = {}
 
 def build_cache_key(prompt: str, model_name: str) -> str:
     raw_key = f"{model_name}:{prompt}"
     return hashlib.sha256(raw_key.encode()).hexdigest()
 
-# ---------------------------
-# Main LLM Call
-# ---------------------------
-def call_gemini(user_id: str, prompt: str) -> Tuple[bool, str]:
 
-    # ---------- Initialize user ----------
-    if user_id not in user_state:
-        user_state[user_id] = {
-            "memory": [],
-            "request_timestamps": deque(),
-            "token_usage": 0
-        }
+# ==============================
+# LLM Service
+# ==============================
 
-    user = user_state[user_id]
+class LLMService:
 
-    # ---------- Per-user rate limiting ----------
-    current_time = time.time()
-    max_requests_per_minute = int(os.getenv("MAX_REQUESTS_PER_MINUTE", 10))
+    def __init__(self):
+        self.api_key = os.getenv("GENAI_API_KEY")
+        self.model_name = os.getenv("GENAI_MODEL_NAME", "gemini-2.5-flash")
 
-    while user["request_timestamps"] and current_time - user["request_timestamps"][0] > 60:
-        user["request_timestamps"].popleft()
+        self.max_input_tokens = int(os.getenv("MAX_INPUT_TOKENS", "1000"))
+        self.max_output_tokens = int(os.getenv("MAX_OUTPUT_TOKENS", "500"))
+        self.max_context_tokens = int(os.getenv("MAX_CONTEXT_TOKENS", "8000"))
+        self.max_memory_tokens = int(os.getenv("MAX_MEMORY_TOKENS", "3000"))
+        self.max_session_tokens = int(os.getenv("MAX_SESSION_TOKENS", "5000"))
+        self.max_requests_per_minute = int(os.getenv("MAX_REQUESTS_PER_MINUTE", "10"))
 
-    if len(user["request_timestamps"]) >= max_requests_per_minute:
-        logger.warning(f"Rate limit exceeded for user {user_id}")
-        return False, "Too many requests. Slow down."
+        self.cost_per_1k_tokens = float(os.getenv("COST_PER_1K_TOKENS", "0.0003"))
+        self.cache_ttl = int(os.getenv("CACHE_TTL_SECONDS", "300"))
 
-    user["request_timestamps"].append(current_time)
+        if not self.api_key:
+            raise ValueError("GENAI_API_KEY not set")
 
-    # ---------- Config ----------
-    api_key = os.getenv("GENAI_API_KEY")
-    model_name = os.getenv("GENAI_MODEL_NAME", "gemini-flash-latest")
-    fallback_model = os.getenv("FALLBACK_MODEL", "gemini-flash-lite-latest")
+        self.client = genai.Client(api_key=self.api_key)
 
-    if not api_key:
-        return False, "API key not found"
+    # ------------------------------
+    # User State Management
+    # ------------------------------
 
-    max_input_tokens = int(os.getenv("MAX_INPUT_TOKENS", 2000))
-    max_output_tokens = int(os.getenv("MAX_OUTPUT_TOKENS", 1500))
-    max_context_tokens = int(os.getenv("MAX_CONTEXT_TOKENS", 8500))
-    max_memory_tokens = int(os.getenv("MAX_MEMORY_TOKENS", 3000))
-    max_session_tokens = int(os.getenv("MAX_SESSION_TOKENS", 5000))
+    def _get_user_state(self, user_id: str) -> dict:
+        if user_id not in users_state:
+            users_state[user_id] = {
+                "conversation_history": [],
+                "token_usage": 0,
+                "request_timestamps": deque()
+            }
+        return users_state[user_id]
 
-    cost_per_1k_tokens = float(os.getenv("COST_PER_1K_TOKENS", 0.0003))
+    # ------------------------------
+    # Rate Limiting
+    # ------------------------------
 
-    max_failures = int(os.getenv("CIRCUIT_MAX_FAILURES", 3))
-    cooldown_seconds = int(os.getenv("CIRCUIT_COOLDOWN_SECONDS", 60))
+    def _check_rate_limit(self, user_state: dict) -> bool:
+        now = time.time()
 
-    # ---------- Circuit breaker check ----------
-    if circuit_state["is_open"]:
-        if time.time() - circuit_state["opened_at"] < cooldown_seconds:
-            return False, "LLM temporarily unavailable. Try later."
-        else:
-            logger.info("Circuit half-open. Testing recovery.")
-            circuit_state["is_open"] = False
-            circuit_state["failure_count"] = 0
+        while user_state["request_timestamps"] and now - user_state["request_timestamps"][0] > 60:
+            user_state["request_timestamps"].popleft()
 
-    # ---------- Input token guard ----------
-    input_tokens = estimate_tokens(prompt)
-    if input_tokens > max_input_tokens:
-        return False, "Input too large."
+        if len(user_state["request_timestamps"]) >= self.max_requests_per_minute:
+            return False
 
-    client = genai.Client(api_key=api_key)
+        user_state["request_timestamps"].append(now)
+        return True
 
-    try:
-        # ---------- Append user message ----------
-        user["memory"].append({"role": "user", "content": prompt})
+    # ------------------------------
+    # Summarization
+    # ------------------------------
 
-        # ---------- Build full prompt ----------
-        def build_prompt():
-            fp = ""
-            for msg in user["memory"]:
-                fp += f"{msg['role']}: {msg['content']}\n"
-            fp += "ASSISTANT:"
-            return fp
+    def _summarize_history(self, messages: List[dict]) -> str:
+        summary_prompt = "Summarize this conversation briefly, preserving key context:\n\n"
+        for msg in messages:
+            summary_prompt += f"{msg['role']}: {msg['content']}\n"
 
-        full_prompt = build_prompt()
-        memory_tokens = estimate_tokens(full_prompt)
+        response = self.client.models.generate_content(
+            model=self.model_name,
+            contents=summary_prompt,
+            config={"max_output_tokens": 300}
+        )
 
-        # ---------- Memory summarization ----------
-        if memory_tokens > max_memory_tokens:
-            logger.warning("Memory exceeded. Summarizing...")
+        return response.text if response and response.text else ""
 
-            old_messages = user["memory"][:-2]
-            recent_messages = user["memory"][-2:]
+    # ------------------------------
+    # Chat Method
+    # ------------------------------
 
-            summary = summarize_history(client, model_name, old_messages)
+    def chat(self, user_id: str, prompt: str) -> Tuple[bool, str]:
 
-            user["memory"].clear()
-            user["memory"].append({
-                "role": "system",
-                "content": summary
-            })
-            user["memory"].extend(recent_messages)
+        user_state = self._get_user_state(user_id)
 
-            # REBUILD prompt after summarization
-            full_prompt = build_prompt()
-            memory_tokens = estimate_tokens(full_prompt)
+        # ---- Rate Limit Check ----
+        if not self._check_rate_limit(user_state):
+            logger.warning(f"Rate limit exceeded for user {user_id}")
+            return False, "Too many requests. Please slow down."
 
-        # ---------- Context window guard ----------
-        if memory_tokens > max_context_tokens:
-            return False, "Context window exceeded."
+        # ---- Token Guard ----
+        input_tokens = estimate_tokens(prompt)
+        logger.info(f"[{user_id}] Input tokens: {input_tokens}")
 
-        # ---------- LLM Call with Retry ----------
-        start_time = time.time()
-    
-        # ---------- Cache check ----------
-        cache_ttl = int(os.getenv("CACHE_TTL_SECONDS", 300))
+        if input_tokens > self.max_input_tokens:
+            return False, "Input exceeds maximum token limit."
 
-        cache_key = build_cache_key(prompt, model_name)
-        current_time = time.time()
+        # ---- Cache Check (Stateless Only) ----
+        cache_key = build_cache_key(prompt, self.model_name)
+        now = time.time()
 
         if cache_key in cache_store:
             entry = cache_store[cache_key]
-            if current_time - entry["timestamp"] < cache_ttl:
-                logger.info("Cache HIT")
+            if now - entry["timestamp"] < self.cache_ttl:
+                logger.info(f"[{user_id}] Cache HIT")
                 return True, entry["response"]
             else:
-                logger.info("Cache expired")
                 del cache_store[cache_key]
 
-        logger.info("Cache MISS")
+        logger.info(f"[{user_id}] Cache MISS")
 
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=full_prompt,
-                config={"max_output_tokens": max_output_tokens}
-            )
-            circuit_state["failure_count"] = 0
+        # ---- Append to Memory ----
+        user_state["conversation_history"].append({
+            "role": "user",
+            "content": prompt
+        })
 
-        except Exception as e:
-            error_message = str(e)
+        # ---- Build Context ----
+        full_prompt = ""
+        for msg in user_state["conversation_history"]:
+            full_prompt += f"{msg['role']}: {msg['content']}\n"
+        full_prompt += "assistant: "
 
-            if "429" in error_message:
-                logger.warning("429 detected. Retrying once...")
-                time.sleep(2)
+        memory_tokens = estimate_tokens(full_prompt)
 
-                try:
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=full_prompt,
-                        config={"max_output_tokens": max_output_tokens}
-                    )
-                    circuit_state["failure_count"] = 0
+        # ---- Memory Compression ----
+        if memory_tokens > self.max_memory_tokens:
+            logger.warning(f"[{user_id}] Memory limit exceeded, summarizing")
 
-                except Exception:
-                    logger.warning("Retry failed. Using fallback model...")
-                    response = client.models.generate_content(
-                        model=fallback_model,
-                        contents=full_prompt,
-                        config={"max_output_tokens": max_output_tokens}
-                    )
-                    circuit_state["failure_count"] = 0
-            else:
-                circuit_state["failure_count"] += 1
-                response = None
+            old_messages = user_state["conversation_history"][:-2]
+            recent_messages = user_state["conversation_history"][-2:]
 
-        # ---------- Circuit open check ----------
-        if circuit_state["failure_count"] >= max_failures:
-            circuit_state["is_open"] = True
-            circuit_state["opened_at"] = time.time()
-            return False, "LLM disabled due to repeated failures."
+            summary = self._summarize_history(old_messages)
 
-        cache_store[cache_key] = {
-            "response": response.text,
-            "timestamp": current_time,
-            "model": model_name
-        }
+            user_state["conversation_history"] = [{
+                "role": "system",
+                "content": f"Conversation summary: {summary}"
+            }] + recent_messages
 
-        if not response or not response.text:
-            return False, "Empty response"
+        # ---- LLM Call ----
+        start_time = time.time()
+
+        response = self.client.models.generate_content(
+            model=self.model_name,
+            contents=full_prompt,
+            config={"max_output_tokens": self.max_output_tokens}
+        )
 
         latency = time.time() - start_time
-        logger.info(f"LLM latency: {latency:.3f}s")
+        logger.info(f"[{user_id}] LLM latency: {latency:.3f}s")
+
+        if not response or not response.text:
+            return False, "Empty response from LLM."
 
         response_text = response.text
 
-        # ---------- Append assistant message ----------
-        user["memory"].append({"role": "assistant", "content": response_text})
+        # ---- Update Memory ----
+        user_state["conversation_history"].append({
+            "role": "assistant",
+            "content": response_text
+        })
 
-        # ---------- Correct token accounting ----------
-        prompt_tokens = estimate_tokens(full_prompt)
+        # ---- Token Accounting ----
         output_tokens = estimate_tokens(response_text)
-        total_tokens = prompt_tokens + output_tokens
+        total_tokens = input_tokens + output_tokens
 
-        user["token_usage"] += total_tokens
+        user_state["token_usage"] += total_tokens
 
-        # ---------- Session quota ----------
-        if user["token_usage"] > max_session_tokens:
-            return False, "Session token limit reached."
+        logger.info(f"[{user_id}] Total tokens: {total_tokens}")
+        logger.info(f"[{user_id}] Session tokens: {user_state['token_usage']}")
 
-        # ---------- Cost estimation ----------
-        cost = (total_tokens / 1000) * cost_per_1k_tokens
+        # ---- Session Quota ----
+        if user_state["token_usage"] > self.max_session_tokens:
+            return False, "Session token limit exceeded."
 
-        logger.info(f"Prompt tokens: {prompt_tokens}")
-        logger.info(f"Output tokens: {output_tokens}")
-        logger.info(f"Total tokens: {total_tokens}")
-        logger.info(f"Estimated cost: ${cost:.6f}")
+        # ---- Cost Estimation ----
+        estimated_cost = (total_tokens / 1000) * self.cost_per_1k_tokens
+        logger.info(f"[{user_id}] Estimated cost: ${estimated_cost:.6f}")
 
-        context_usage = (total_tokens / max_context_tokens) * 100
-        logger.info(f"Context usage: {context_usage:.2f}%")
+        # ---- Context Usage ----
+        context_usage = (total_tokens / self.max_context_tokens) * 100
+        logger.info(f"[{user_id}] Context usage: {context_usage:.2f}%")
+
+        # ---- Store in Cache ----
+        cache_store[cache_key] = {
+            "response": response_text,
+            "timestamp": now,
+            "model": self.model_name
+        }
 
         return True, response_text
-
-    except Exception as e:
-        logger.error(f"Gemini API error: {e}")
-        return False, str(e)
